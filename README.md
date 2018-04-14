@@ -1,1 +1,6 @@
-Project by chaitea and MR
+Finance project
+_________________________
+
+Chaitea
+MRele
+_________________________
