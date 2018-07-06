@@ -1,46 +1,89 @@
+import MySQLdb
 import urllib.request, json 
 from yahoo_finance import Share
 
-stock = ['ticker', 0, 0, 0] #ticker, ROC, E/P, ranking
-list_data = []
+def insert(db):
+	#Text file that stores list of NASDAQ stocks
+	stream = open('nasdaqlisted.txt', 'r')
+	nasdaq_list = stream.readlines()
 
-file1 = 'nasdaqlisted.txt'
-file2 = 'data.txt'
-stream1 = open(file1, 'r')
-stream2 = open("data.txt", "w")
-list1 = stream1.readlines()
-'''
-with urllib.request.urlopen("https://query2.finance.yahoo.com/v10/finance/quoteSummary/{}?modules=financialData".format("NVDA")) as url:
-    data = json.loads(url.read().decode())
-    jsondata = data["quoteSummary"]["result"]
-    print(jsondata[0].get("financialData").get("returnOnEquity").get("raw"))
-'''
+	cursor = db.cursor()
+	#Clear and add all stocks in NASDAQ listed to DB 
+	db.query("TRUNCATE TABLE stock_info")
+	for line in nasdaq_list: 
+		ticker = line.split('|', 1)[0] #Parse for ticker only
+		print(ticker)
+		try:
+			#Get JSON data from yahoo
+			with urllib.request.urlopen("https://query2.finance.yahoo.com/v10/finance/quoteSummary/{}?modules=financialData".format(ticker)) as url:
+				data = json.loads(url.read().decode())
+				jsondata = data["quoteSummary"]["result"]
+			roc = jsondata[0].get("financialData").get("returnOnEquity").get("raw")
+			ep = jsondata[0].get("financialData").get("revenuePerShare").get("raw") / jsondata[0].get("financialData").get("currentPrice").get("raw")
+			#Cases where no ROC or EP data
+			if roc == None:
+				roc = 0
+			if ep == None:
+				ep = 0
+			#Insert into db
+			cursor.execute("""INSERT INTO stock_info values (%s, %s, %s, %s, %s)""", (ticker, roc, ep, 0, 0))
+		except:
+			print("Skip or Error")
+	db.commit()
+	cursor.close()
+def update_info(db):
+	cursor = db.cursor()
+	cursor.execute("SELECT * from stock_info")
+	#Update all tickers in db	
+	for stock_row in cursor: 
+		ticker = stock_row[0]
+		print(ticker)
+		try:
+			with urllib.request.urlopen("https://query2.finance.yahoo.com/v10/finance/quoteSummary/{}?modules=financialData".format(ticker)) as url:
+				data = json.loads(url.read().decode())
+				jsondata = data["quoteSummary"]["result"]
+			roc = jsondata[0].get("financialData").get("returnOnEquity").get("raw")
+			ep = jsondata[0].get("financialData").get("revenuePerShare").get("raw") / jsondata[0].get("financialData").get("currentPrice").get("raw")
+			#Cases where no ROC or EP data
+			if roc == None:
+				roc = 0
+			if ep == None:
+				ep = 0
+			cursor.execute("""UPDATE stock_info SET ROC = %s, EP = %s WHERE ticker = %s""", (roc, ep, ticker) )
+		except:
+			print("Skip or Error")
+	db.commit()
+	cursor.close()
 
-#https://stackoverflow.com/questions/38567661/how-to-get-key-statistics-for-yahoo-finance-web-search-api
-#https://stackoverflow.com/questions/16675849/python-parsing-json-data-set
+def calc_ranks(db):
+	
+	#Clear previous rankings
+	cursor = db.cursor()
+	cursor.execute("UPDATE stock_info set Ranking = 0")
+	
+	#Update rankings
+	cursor.execute("SELECT * from stock_info ORDER BY ROC DESC")
+	calc_rank_helper(db, cursor)
+	cursor.execute("SELECT * from stock_info ORDER BY EP DESC")
+	calc_rank_helper(db, cursor)
 
-for line in list1: #add all tickers from nasdaq listed
-	ticker = line.split('|', 1)[0] # add only first word
-	try:
-		with urllib.request.urlopen("https://query2.finance.yahoo.com/v10/finance/quoteSummary/{}?modules=financialData".format(ticker)) as url:
-			data = json.loads(url.read().decode())
-			jsondata = data["quoteSummary"]["result"]
-		stream2.write(ticker + "\n")
-		stream2.write(str(jsondata[0].get("financialData").get("returnOnEquity").get("raw")) + "\n")
-		stream2.write(str(jsondata[0].get("financialData").get("revenuePerShare").get("raw") / jsondata[0].get("financialData").get("currentPrice").get("raw"))+ "\n")
-	except:
-		print("skip")
-stream2.close()
-'''
-	stock[0] = ticker
-	stock[1] = jsondata[0].get("financialData").get("returnOnEquity").get("raw")
-	stock[2] = jsondata[0].get("financialData").get("revenuePerShare").get("raw") / jsondata[0].get("financialData").get("currentPrice").get("raw")
-	list_data.append(stock)
-	#market cap todo
+	cursor.close()
 
-print(list_data)
-'''
-'''
-for line in list2:#add from otherlisted
-	ticker = line.split('|', 1)[0] # add only first word
-'''
+def calc_rank_helper(db, cursor):
+	rank = 0;
+	#For each stock, add its relative ranking to its overall ranking score
+	for stock_row in cursor: 
+		ticker = stock_row[0] 
+		print(ticker)
+		cursor.execute("""UPDATE stock_info SET Ranking = %s WHERE ticker = %s""", (rank + stock_row[3], ticker) )
+		rank += 1
+	db.commit()
+
+def print_info(db):
+	cursor = db.cursor()
+	#Select top 10 stocks
+	cursor.execute("""SELECT * from stock_info ORDER BY Ranking LIMIT 10""")
+	for stock_row in cursor:
+		print(stock_row)
+	cursor.close()
+
